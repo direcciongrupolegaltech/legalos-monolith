@@ -101,29 +101,27 @@ rm -f /tmp/node_pkg_status.txt
 
 # --- 3. CREACIÓN DE ARCHIVOS DE CONFIGURACIÓN DE CALIDAD ---
 
-# 3.1 ESLint (.eslintrc.json)
-if [ ! -f ".eslintrc.json" ] && [ ! -f ".eslintrc.js" ]; then
-    log_info "Creando archivo .eslintrc.json con estándares de seguridad..."
-    cat << 'EOF' > .eslintrc.json
-{
-  "extends": [
-    "next/core-web-vitals",
-    "plugin:@typescript-eslint/recommended"
-  ],
-  "plugins": [
-    "@typescript-eslint"
-  ],
-  "rules": {
-    "no-unused-vars": "off",
-    "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
-    "@typescript-eslint/no-explicit-any": "error",
-    "@typescript-eslint/no-floating-promises": "error",
-    "@typescript-eslint/no-misused-promises": "error",
-    "no-console": ["warn", { "allow": ["warn", "error"] }]
+# 3.1 ESLint (eslint.config.js - Flat Config para ESLint 9+ y Next.js 15/16)
+if [ ! -f "eslint.config.js" ] && [ ! -f "eslint.config.mjs" ]; then
+    log_info "Creando archivo eslint.config.js (Flat Config) con estándares de seguridad..."
+    cat << 'EOF' > eslint.config.js
+const nextConfig = require("eslint-config-next");
+const tseslint = require("typescript-eslint");
+
+module.exports = [
+  ...nextConfig,
+  ...tseslint.configs.recommended,
+  {
+    rules: {
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-explicit-any": "error",
+      "no-console": ["warn", { allow: ["warn", "error"] }]
+    }
   }
-}
+];
 EOF
-    log_success "Archivo .eslintrc.json creado exitosamente."
+    log_success "Archivo eslint.config.js creado exitosamente."
 else
     log_warn "Ya existe una configuración de ESLint en el directorio raíz. Se omitió la creación para evitar conflictos."
 fi
@@ -475,7 +473,7 @@ echo -e "\n${GREEN}=============================================================
 echo -e "          ${GREEN}BLINDAJE DE SEGURIDAD LEGALOS COMPLETADO (V2)${NC}"
 echo -e "${GREEN}==============================================================${NC}"
 echo -e "Las aduanas locales y en la nube han sido instaladas con éxito."
-echo -e "Se actualizaron package.json, .eslintrc.json y tsconfig.json."
+echo -e "Se actualizaron package.json, eslint.config.js y tsconfig.json."
 echo -e "Recuerda añadir estos cambios al control de versiones ejecutando:"
-echo -e "  ${YELLOW}git add .eslintrc.json tsconfig.json package.json .github/ .gitignore && git commit -m 'chore: aduanas de calidad robustas'${NC}"
+echo -e "  ${YELLOW}git add eslint.config.js tsconfig.json package.json .github/ .gitignore && git commit -m 'chore: aduanas de calidad robustas'${NC}"
 echo -e "${GREEN}==============================================================${NC}\n"
