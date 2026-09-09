@@ -1,0 +1,54 @@
+name: Release on Merge
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  draft-release:
+    name: Generate Release Tag & Draft Notes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read Version from package.json
+        id: get_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detectada versión del proyecto: v$VERSION"
+
+      - name: Verify Tag Existence
+        id: check_tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="v${{ steps.get_version.outputs.VERSION }}"
+          EXISTS=$(gh api repos/${{ github.repository }}/git/ref/tags/$TAG_NAME --silent > /dev/null && echo "true" || echo "false")
+          echo "EXISTS=$EXISTS" >> $GITHUB_OUTPUT
+          echo "El tag $TAG_NAME existe?: $EXISTS"
+
+      - name: Create GitHub Release Draft
+        if: steps.check_tag.outputs.EXISTS == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="v${{ steps.get_version.outputs.VERSION }}"
+          echo "Creando versión borrador para $TAG_NAME..."
+          gh release create "$TAG_NAME" \
+            --draft \
+            --title "Release $TAG_NAME" \
+            --generate-notes
+
+      - name: Handle Duplicate Version (Warning)
+        if: steps.check_tag.outputs.EXISTS == 'true'
+        run: |
+          echo "::warning title=Versión Duplicada::La versión v${{ steps.get_version.outputs.VERSION }} ya está etiquetada en GitHub. Incrementa el campo 'version' en package.json en tu rama de trabajo para generar un nuevo release al mezclar."

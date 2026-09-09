@@ -1,0 +1,24 @@
+{
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.5.0",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.2.18",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.4",
+    "jest": "^30.5.1",
+    "next": "^16.3.4",
+    "pg": "^8.23.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "ts-jest": "^29.4.12",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test:rls": "jest tests/rls-isolation.test.ts"
+  }
+}

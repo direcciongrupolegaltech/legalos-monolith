@@ -1,0 +1,53 @@
+name: LegalOS Integration CI
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: legalos_test
+          POSTGRES_PASSWORD: postgres_secure_test_123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Código Fuente
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js con Cache Optimizado
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar Dependencias
+        run: npm ci
+
+      - name: Ejecutar Linter Estático
+        run: npm run lint
+
+      - name: Ejecutar Compilador Estático TypeScript
+        run: npm run typecheck
+
+      - name: Validar Estructura y Políticas RLS en Base de Datos
+        env:
+          DATABASE_URL: postgresql://postgres:postgres_secure_test_123@localhost:5432/legalos_test
+        run: |
+          # 1. Aplicar migraciones ordenadas de Supabase CLI en el Postgres local
+          # 2. Correr la suite adversarial rls-isolation.test.ts para bloquear fugas multi-tenant
+          npm run test:rls
+
+      - name: Compilar Monolito Next.js
+        run: npm run build
