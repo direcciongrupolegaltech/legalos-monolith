@@ -25,7 +25,8 @@
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
-    "test:rls": "jest tests/rls-isolation.test.ts"
+    "db:migrate:test": "node scripts/setup-test-db.js",
+    "test:rls": "node scripts/setup-test-db.js && jest tests/rls-isolation.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

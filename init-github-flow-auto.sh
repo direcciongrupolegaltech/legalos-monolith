@@ -75,8 +75,12 @@ try {
     pkg.scripts.typecheck = "tsc --noEmit";
     modified = true;
   }
-  if (pkg.scripts["test:rls"] !== "jest tests/rls-isolation.test.ts") {
-    pkg.scripts["test:rls"] = "jest tests/rls-isolation.test.ts";
+  if (pkg.scripts["db:migrate:test"] !== "node scripts/setup-test-db.js") {
+    pkg.scripts["db:migrate:test"] = "node scripts/setup-test-db.js";
+    modified = true;
+  }
+  if (pkg.scripts["test:rls"] !== "node scripts/setup-test-db.js && jest tests/rls-isolation.test.ts") {
+    pkg.scripts["test:rls"] = "node scripts/setup-test-db.js && jest tests/rls-isolation.test.ts";
     modified = true;
   }
 

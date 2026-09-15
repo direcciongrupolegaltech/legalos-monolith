@@ -45,8 +45,8 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres_secure_test_123@localhost:5432/legalos_test
         run: |
-          # 1. Aplicar migraciones ordenadas de Supabase CLI en el Postgres local
-          # 2. Correr la suite adversarial rls-isolation.test.ts para bloquear fugas multi-tenant
+          # 1. Aplica esquema 'auth' y migraciones de Supabase en el Postgres local (scripts/setup-test-db.js)
+          # 2. Corre la suite adversarial rls-isolation.test.ts para bloquear fugas multi-tenant
           npm run test:rls
 
       - name: Compilar Monolito Next.js
