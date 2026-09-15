@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -12,7 +16,7 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "incremental": true,
     "plugins": [
       {
@@ -20,11 +24,16 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"],
-      "@/supabase/*": ["./supabase/*"],
-      "@/tests/*": ["./tests/*"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@/supabase/*": [
+        "./supabase/*"
+      ],
+      "@/tests/*": [
+        "./tests/*"
+      ]
     },
-
     /* CONFIGURACIONES ESTRICTAS ADICIONALES PARA EL BLINDAJE DE LEGALOS */
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -33,13 +42,11 @@
     "strictPropertyInitialization": true,
     "noImplicitThis": true,
     "alwaysStrict": true,
-
     /* Mitigación de errores lógicos y de ejecución en producción */
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-
     /* 
       noUncheckedIndexedAccess: CRÍTICO PARA SUPABASE Y LLM RESPONSES.
       Fuerza a tratar cualquier acceso por índice dinámico o fila de BD 
@@ -48,7 +55,6 @@
       "Cannot read property of undefined" en producción.
     */
     "noUncheckedIndexedAccess": true,
-
     /* 
       exactOptionalPropertyTypes: Garantiza la correspondencia con PostgreSQL.
       Evita que propiedades marcadas como opcionales (?) sean asignadas como 
@@ -62,7 +68,8 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    "src/lib/supabase-types.ts"
+    "src/lib/supabase-types.ts",
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
