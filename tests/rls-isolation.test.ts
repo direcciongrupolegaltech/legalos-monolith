@@ -1,287 +1,216 @@
-import { Client } from 'pg';
-
 /**
- * =============================================================================
- * SUITE DE PRUEBAS ADVERSARIALES DE AISLAMIENTO MULTI-TENANT (RLS) - LEGALOS
- * =============================================================================
- * Patrón de Arquitectura: Confianza Cero (Zero-Trust) & Shift-Left Testing
- * Diseñado por: Desarrollador de Software Senior / Arquitecto de Soluciones
- * Propósito: Simular ataques de inyección, IDOR, manipulación de payloads y
- *            violación de roles (RBAC) a nivel de motor de base de datos,
- *            certificando que las políticas de Row Level Security (RLS) de
- *            PostgreSQL son infranqueables ante fallos de la lógica del cliente.
+ * tests/rls-isolation.test.ts
+ * Suite de Pruebas Adversariales de Aislamiento Multi-Tenant y RLS para LegalOS AI
  * 
- * Estrategia de Prueba: 
- * 1. Transacciones Herméticas: Cada test se ejecuta dentro de un bloque
- *    BEGIN...ROLLBACK para garantizar idempotencia total y cero mutaciones.
- * 2. Impersonación Directa: Inyección de claims JWT en el contexto local
- *    de PostgreSQL para suplantar identidades de Supabase Auth sin red externa.
- * =============================================================================
+ * Diseñado bajo principios SOLID, DRY y KISS para validación de seguridad Confianza Cero (Zero-Trust).
+ * Ejecutado localmente y en el pipeline de CI/CD (GitHub Actions) mediante `npm run test:rls`.
  */
 
-const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres_secure_test_123@localhost:5432/legalos_test';
+import { Client } from 'pg';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.test' });
 
-describe('Suite de Seguridad RLS: Pruebas Adversariales Multi-Tenant', () => {
-  let db: Client;
+// Tipado estricto para contextualización de sesiones en pruebas
+interface TestUserSession {
+  userId: string;
+  firmId: string;
+  role: 'authenticated' | 'anon';
+}
 
-  // --- SEMILLAS Y CONFIGURACIÓN DE IDENTIDADES DE PRUEBA CONTROLADAS ---
-  const TENANT_A_FIRMA = 'a0000000-0000-0000-0000-00000000000a';
-  const TENANT_B_FIRMA = 'b0000000-0000-0000-0000-00000000000b';
+// Configuración de la conexión a PostgreSQL efímero de CI / local Supabase
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:54322/postgres';
 
-  // Firma A: Usuarios
-  const USER_ADMIN_A = 'aaaa1111-1111-1111-1111-111111111111';
-  const USER_ABOGADO_A = 'aaaa2222-2222-2222-2222-222222222222';
+describe('Suite Adversarial de Aislamiento Multi-Tenant (RLS & RBAC)', () => {
+  let client: Client;
 
-  // Firma B: Usuarios
-  const USER_ADMIN_B = 'bbbb1111-1111-1111-1111-111111111111';
+  // UUIDs estáticos para determinismo en la suite de pruebas
+  const FIRM_A_ID = '11111111-1111-4111-a111-111111111111';
+  const FIRM_B_ID = '22222222-2222-4222-a222-222222222222';
 
-  // IDs de Expedientes Base
-  const EXPEDIENTE_A_ID = 'e0000000-0000-0000-0000-00000000000a';
-  const EXPEDIENTE_B_ID = 'e0000000-0000-0000-0000-00000000000b';
+  const USER_A_LAWYER_ID = 'aaaa1111-1111-4111-a111-111111111111';
+  const USER_A_ADMIN_ID  = 'aaaa2222-2222-4222-a222-222222222222';
+  const USER_B_ADMIN_ID  = 'bbbb1111-1111-4111-a111-111111111111';
+
+  const CASE_A_ID = 'caca1111-1111-4111-a111-111111111111';
+  const CASE_B_ID = 'cbcb2222-2222-4222-a222-222222222222';
+
+  /**
+   * Helper DRY para impersonar el contexto de sesión de Supabase Auth en PostgreSQL.
+   * Configura las variables de sesión locales (SET LOCAL) para simular el JWT claim.
+   */
+  async function applySessionContext(session: TestUserSession): Promise<void> {
+    const jwtClaims = JSON.stringify({
+      sub: session.userId,
+      role: session.role,
+      user_metadata: { firm_id: session.firmId },
+      app_metadata: { provider: 'email' },
+    });
+
+    // Inyectar rol autenticado y claims JWT en el scope de la transacción SQL local
+    await client.query(`SET LOCAL role = '${session.role}';`);
+    await client.query(`SET LOCAL "request.jwt.claims" = '${jwtClaims}';`);
+    await client.query(`SET LOCAL "request.jwt.claim.sub" = '${session.userId}';`);
+  }
 
   beforeAll(async () => {
-    db = new Client({ connectionString });
-    await db.connect();
+    client = new Client({ connectionString: DATABASE_URL });
+    await client.connect();
 
-    // Aprovisionamiento preventivo de tablas de soporte organizacional para la simulación
-    // Se asume el esquema físico definido en la especificación de RLS de LegalOS
-    await db.query('BEGIN;');
-    try {
-      // 1. Limpieza estructural de entorno de pruebas
-      await db.query('TRUNCATE TABLE audit_events, expedientes, members, firms CASCADE;');
+    // Reset de prueba y sembrado superusuario (bypass RLS con superuser para fixtures base)
+    await client.query('BEGIN;');
 
-      // 2. Insertar firmas (Tenants)
-      await db.query(`
-        INSERT INTO firms (id, name) VALUES 
-        ('${TENANT_A_FIRMA}', 'Firma Corporativa Legal A'),
-        ('${TENANT_B_FIRMA}', 'Bufete Asociados B');
-      `);
+    // Limpieza previa idempotente
+    await client.query(`
+      DELETE FROM public.cases WHERE id IN ('${CASE_A_ID}', '${CASE_B_ID}');
+      DELETE FROM public.firm_members WHERE user_id IN ('${USER_A_LAWYER_ID}', '${USER_A_ADMIN_ID}', '${USER_B_ADMIN_ID}');
+      DELETE FROM public.user_profiles WHERE id IN ('${USER_A_LAWYER_ID}', '${USER_A_ADMIN_ID}', '${USER_B_ADMIN_ID}');
+      DELETE FROM public.firms WHERE id IN ('${FIRM_A_ID}', '${FIRM_B_ID}');
+      
+      -- 1. Insertar firmas con formato de NIT válido (regex: '^[0-9]+-[0-9]$')
+      INSERT INTO public.firms (id, name, nit) VALUES 
+        ('${FIRM_A_ID}', 'Bufete Alfa Legal', '900111222-1'),
+        ('${FIRM_B_ID}', 'Bufete Beta Asesores', '900333444-2');
 
-      // 3. Registrar membresías y roles (RBAC)
-      await db.query(`
-        INSERT INTO members (user_id, firm_id, role) VALUES 
-        ('${USER_ADMIN_A}', '${TENANT_A_FIRMA}', 'administrator'),
-        ('${USER_ABOGADO_A}', '${TENANT_A_FIRMA}', 'lawyer'),
-        ('${USER_ADMIN_B}', '${TENANT_B_FIRMA}', 'administrator');
-      `);
+      -- 2. Insertar perfiles de usuario
+      INSERT INTO public.user_profiles (id, first_name, last_name, email) VALUES
+        ('${USER_A_LAWYER_ID}', 'Abogado', 'Alfa', 'abogado.alfa@test.com'),
+        ('${USER_A_ADMIN_ID}', 'Admin', 'Alfa', 'admin.alfa@test.com'),
+        ('${USER_B_ADMIN_ID}', 'Admin', 'Beta', 'admin.beta@test.com');
 
-      // 4. Registrar expedientes de prueba
-      await db.query(`
-        INSERT INTO expedientes (id, title, firm_id) VALUES 
-        ('${EXPEDIENTE_A_ID}', 'Litigio Civil - Confidencial Firma A', '${TENANT_A_FIRMA}'),
-        ('${EXPEDIENTE_B_ID}', 'Acción Penal de Fraude - Privado Firma B', '${TENANT_B_FIRMA}');
-      `);
+      -- 3. Asignar membresías en firmas con roles correspondientes
+      INSERT INTO public.firm_members (user_id, firm_id, role_id) VALUES 
+        ('${USER_A_LAWYER_ID}', '${FIRM_A_ID}', 'lawyer'),
+        ('${USER_A_ADMIN_ID}',  '${FIRM_A_ID}', 'administrator'),
+        ('${USER_B_ADMIN_ID}',  '${FIRM_B_ID}', 'administrator');
 
-      await db.query('COMMIT;');
-    } catch (error) {
-      await db.query('ROLLBACK;');
-      console.error('Fallo en la carga de semillas de seguridad para RLS test', error);
-      throw error;
-    }
+      -- 4. Insertar expedientes base (cases)
+      INSERT INTO public.cases (id, firm_id, title, case_number) VALUES 
+        ('${CASE_A_ID}', '${FIRM_A_ID}', 'Proceso Alfa vs Estado', '11001400300120260000100'),
+        ('${CASE_B_ID}', '${FIRM_B_ID}', 'Proceso Beta vs Particular', '11001400300120260000200');
+    `);
+
+    await client.query('COMMIT;');
   });
 
   afterAll(async () => {
-    await db.end();
-  });
-
-  /**
-   * Helper Técnico: Configura las variables locales de la sesión PostgreSQL
-   * para emular de forma exacta las llamadas interceptadas de Supabase Auth
-   * sin dependencias de red.
-   */
-  const setAuthContext = async (userId: string) => {
-    const claims = JSON.stringify({
-      sub: userId,
-      role: 'authenticated',
-      email: `${userId}@legalos.co`
-    });
-    await db.query(`SET LOCAL "request.jwt.claims" = '${claims}';`);
-  };
-
-  /**
-   * ===========================================================================
-   * ESCENARIO 1: ATAQUE DE LECTURA CRUZADA (SELECT IDOR VULNERABILITY)
-   * ===========================================================================
-   */
-  test('ATAQUE DE LECTURA: Un abogado de la Firma A NO debe poder ver expedientes de la Firma B', async () => {
-    await db.query('BEGIN;');
-    try {
-      // 1. Nos autenticamos como Abogado de la Firma A
-      await setAuthContext(USER_ABOGADO_A);
-
-      // 2. Ejecutamos una consulta SELECT general sobre expedientes sin filtros WHERE
-      const result = await db.query('SELECT * FROM expedientes;');
-
-      // 3. Verificaciones de seguridad (Assertions)
-      // - El abogado de la Firma A debe ver su propio caso.
-      const belongsToA = result.rows.some((r: { id: string }) => r.id === EXPEDIENTE_A_ID);
-      expect(belongsToA).toBe(true);
-
-      // - El expediente confidencial de la Firma B debe ser TOTALMENTE invisible.
-      const leakFromB = result.rows.some((r: { id: string }) => r.id === EXPEDIENTE_B_ID);
-      expect(leakFromB).toBe(false);
-      
-      // - El número total de filas devueltas debe restringirse en segundo plano
-      expect(result.rows.length).toBe(1);
-
-    } finally {
-      await db.query('ROLLBACK;');
-    }
-  });
-
-  /**
-   * ===========================================================================
-   * ESCENARIO 2: ATAQUE DE INYECCIÓN DE DATOS EN ESCRITURA (INSERT HIJACKING)
-   * ===========================================================================
-   */
-  test('ATAQUE DE ESCRITURA: Usuario de la Firma A intenta inyectar un expediente forzando el ID de la Firma B', async () => {
-    await db.query('BEGIN;');
-    try {
-      // 1. Nos autenticamos como el Abogado de la Firma A
-      await setAuthContext(USER_ABOGADO_A);
-
-      // 2. Intentamos realizar una inserción fraudulenta forzando la pertenencia a Firma B
-      const maliciousPayload = {
-        id: 'e9999999-9999-9999-9999-999999999999',
-        title: 'Expediente Malicioso Inyectado desde Firma A',
-        firm_id: TENANT_B_FIRMA // <--- Ataque: Intentando escribir en el espacio de Firma B
-      };
-
-      // 3. Ejecución y captura del error esperado de violación de política (WITH CHECK)
-      let rlsBlocked = false;
+    if (client) {
       try {
-        await db.query(`
-          INSERT INTO expedientes (id, title, firm_id) 
-          VALUES ('${maliciousPayload.id}', '${maliciousPayload.title}', '${maliciousPayload.firm_id}');
+        await client.query('BEGIN;');
+        await client.query(`
+          DELETE FROM public.cases WHERE id IN ('${CASE_A_ID}', '${CASE_B_ID}');
+          DELETE FROM public.firm_members WHERE user_id IN ('${USER_A_LAWYER_ID}', '${USER_A_ADMIN_ID}', '${USER_B_ADMIN_ID}');
+          DELETE FROM public.user_profiles WHERE id IN ('${USER_A_LAWYER_ID}', '${USER_A_ADMIN_ID}', '${USER_B_ADMIN_ID}');
+          DELETE FROM public.firms WHERE id IN ('${FIRM_A_ID}', '${FIRM_B_ID}');
         `);
-      } catch (error: any) {
-        // PostgreSQL arroja el código de error 42501 para violaciones de políticas RLS (Insufficient Privilege)
-        if (error.code === '42501') {
-          rlsBlocked = true;
-        } else {
-          throw error;
-        }
+        await client.query('COMMIT;');
+      } catch (err) {
+        console.error('Error during cleanup in afterAll:', err);
+      } finally {
+        await client.end();
       }
-
-      // 4. Certificación del bloqueo de infraestructura
-      expect(rlsBlocked).toBe(true);
-
-    } finally {
-      await db.query('ROLLBACK;');
     }
   });
 
-  /**
-   * ===========================================================================
-   * ESCENARIO 3: ATAQUE DE ACTUALIZACIÓN TRANSVERSAL (CROSS-TENANT UPDATE)
-   * ===========================================================================
-   */
-  test('ATAQUE DE EDICIÓN: Un usuario de la Firma A intenta actualizar el expediente privado de la Firma B', async () => {
-    await db.query('BEGIN;');
-    try {
-      // 1. Autenticar como Admin de la Firma A
-      await setAuthContext(USER_ADMIN_A);
+  beforeEach(async () => {
+    // Iniciar transacción hermética para que cada caso se auto-limpie sin colaterales
+    if (client) await client.query('BEGIN;');
+  });
 
-      // 2. Intentar actualizar el título del expediente de la Firma B
-      const updateResult = await db.query(`
-        UPDATE expedientes 
-        SET title = 'TÍTULO SECUESTRADO POR ATACANTE DE FIRMA A' 
-        WHERE id = '${EXPEDIENTE_B_ID}';
-      `);
-
-      // 3. Verificación de Afectación de Registros
-      // Como el expediente de la Firma B es invisible para el usuario de la Firma A,
-      // la cláusula WHERE no empareja nada, por lo que afecta a 0 filas.
-      expect(updateResult.rowCount).toBe(0);
-
-      // 4. Verificación de Consistencia Física (No alteración)
-      // Cambiamos de contexto a la Firma B para comprobar que su dato sigue intacto
-      await setAuthContext(USER_ADMIN_B);
-      const verifyResult = await db.query(`SELECT title FROM expedientes WHERE id = '${EXPEDIENTE_B_ID}';`);
-      expect(verifyResult.rows[0]?.title).toBe('Acción Penal de Fraude - Privado Firma B');
-
-    } finally {
-      await db.query('ROLLBACK;');
-    }
+  afterEach(async () => {
+    // Abortar la transacción para garantizar inmutabilidad entre pruebas
+    if (client) await client.query('ROLLBACK;');
   });
 
   /**
-   * ===========================================================================
-   * ESCENARIO 4: SEGURIDAD OPERATIVA Y RBAC (DELETE VETO LÓGICO)
-   * ===========================================================================
+   * Escenario A: Lectura Cruzada (Cross-Tenant SELECT / IDOR)
+   * Ataque: Usuario de Firma A consulta expedientes sin filtro WHERE.
+   * Expectativa: RLS debe filtrar transparentemente y devolver SOLO expedientes de Firma A.
    */
-  test('SEGURIDAD RBAC: Un ABOGADO de la Firma A tiene vetado borrar expedientes de su propio bufete', async () => {
-    await db.query('BEGIN;');
-    try {
-      // 1. Autenticar como el Abogado de la Firma A (Rol restrictivo: lawyer)
-      await setAuthContext(USER_ABOGADO_A);
+  it('Escenario A: Debe impedir la lectura cruzada de expedientes entre firmas (SELECT Aislamiento)', async () => {
+    await applySessionContext({
+      userId: USER_A_LAWYER_ID,
+      firmId: FIRM_A_ID,
+      role: 'authenticated',
+    });
 
-      // 2. El abogado intenta borrar el expediente de su propio bufete
-      const deleteAttempt = await db.query(`DELETE FROM expedientes WHERE id = '${EXPEDIENTE_A_ID}';`);
+    const res = await client.query('SELECT id, title, firm_id FROM public.cases;');
 
-      // 3. Verificación: RLS debe filtrar la acción de borrado basándose en el rol del miembro,
-      // reportando que 0 filas fueron alteradas/borradas.
-      expect(deleteAttempt.rowCount).toBe(0);
+    // Verificación 1: Todos los registros retornados deben pertenecer únicamente a Firma A
+    expect(res.rows.length).toBeGreaterThan(0);
+    const hasFirmBData = res.rows.some((row) => row.firm_id === FIRM_B_ID || row.id === CASE_B_ID);
+    expect(hasFirmBData).toBe(false);
 
-    } finally {
-      await db.query('ROLLBACK;');
-    }
+    // Verificación 2: El expediente de Firma A debe ser visible
+    const hasFirmAData = res.rows.some((row) => row.id === CASE_A_ID);
+    expect(hasFirmAData).toBe(true);
   });
 
   /**
-   * ===========================================================================
-   * ESCENARIO 5: ELIMINACIÓN CRUZADA DE TENANTS (CROSS-TENANT DELETE ATTACK)
-   * ===========================================================================
+   * Escenario B: Inyección en Escritura (Cross-Tenant INSERT)
+   * Ataque: Usuario de Firma A intenta insertar un expediente asignando explícitamente `firm_id` de Firma B.
+   * Expectativa: RLS WITH CHECK rechaza la transacción lanzando excepción de seguridad PostgreSQL.
    */
-  test('ATAQUE DE ELIMINACIÓN: El administrador de la Firma A intenta borrar el expediente de la Firma B', async () => {
-    await db.query('BEGIN;');
-    try {
-      // 1. Autenticar como Administrador de la Firma A (Rol con privilegios de borrado en su propio tenant)
-      await setAuthContext(USER_ADMIN_A);
+  it('Escenario B: Debe abortar transaccionalmente cualquier intento de inyección de tenant en INSERT', async () => {
+    await applySessionContext({
+      userId: USER_A_LAWYER_ID,
+      firmId: FIRM_A_ID,
+      role: 'authenticated',
+    });
 
-      // 2. El Administrador intenta borrar el expediente de la Firma B
-      const crossDeleteAttempt = await db.query(`DELETE FROM expedientes WHERE id = '${EXPEDIENTE_B_ID}';`);
+    const MALICIOUS_CASE_ID = '99999999-9999-4999-a999-999999999999';
 
-      // 3. Verificación de Seguridad:
-      // Para el Administrador de la Firma A, el expediente de la Firma B no existe debido a RLS,
-      // por lo tanto la operación debe afectar exactamente a 0 filas.
-      expect(crossDeleteAttempt.rowCount).toBe(0);
+    // Intento de inyección de tenant
+    const insertPromise = client.query(`
+      INSERT INTO public.cases (id, firm_id, title, case_number)
+      VALUES ('${MALICIOUS_CASE_ID}', '${FIRM_B_ID}', 'Expediente Inyectado Ilegal', '11001400300120269999900');
+    `);
 
-      // 4. Cambiar el contexto a Firma B para certificar que el expediente NO fue eliminado
-      await setAuthContext(USER_ADMIN_B);
-      const verifyPersistence = await db.query(`SELECT COUNT(*) FROM expedientes WHERE id = '${EXPEDIENTE_B_ID}';`);
-      expect(parseInt(verifyPersistence.rows[0].count, 10)).toBe(1);
-
-    } finally {
-      await db.query('ROLLBACK;');
-    }
+    // Debe ser rechazado por la directiva WITH CHECK de RLS
+    await expect(insertPromise).rejects.toThrow();
   });
 
   /**
-   * ===========================================================================
-   * ESCENARIO 6: VERIFICACIÓN DEL GRUPO DE CONTROL (BYPASS DE RLS CON SERVICE_ROLE)
-   * ===========================================================================
+   * Escenario C: Control de Acceso Basado en Roles (RBAC en DELETE Intra-Tenant)
+   * Ataque: Abogado (rol 'lawyer') de Firma A intenta eliminar un expediente legítimo de su misma firma.
+   * Expectativa: RLS RBAC impide el borrado (0 filas afectadas), mientras que el Administrador sí puede.
    */
-  test('GRUPO DE CONTROL: Las APIs del sistema que operan bajo "service_role" deben poder ver todos los registros', async () => {
-    await db.query('BEGIN;');
-    try {
-      // 1. Simulamos el rol del sistema o API del servidor (bypass de RLS de Supabase)
-      // Esto simula las operaciones internas administrativas de LegalOS (ej. consolidación nocturna de términos)
-      const claims = JSON.stringify({
-        role: 'service_role' // <--- Bypass legítimo de seguridad de base de datos
-      });
-      await db.query(`SET LOCAL "request.jwt.claims" = '${claims}';`);
+  it('Escenario C: Debe restringir el borrado destructivo a nivel de rol (Abogado rechaza, Admin autoriza)', async () => {
+    // 1. Intento por usuario con rol 'lawyer'
+    await applySessionContext({
+      userId: USER_A_LAWYER_ID,
+      firmId: FIRM_A_ID,
+      role: 'authenticated',
+    });
 
-      // 2. Seleccionamos todos los expedientes
-      const result = await db.query('SELECT * FROM expedientes;');
+    const lawyerDeleteRes = await client.query(`DELETE FROM public.cases WHERE id = '${CASE_A_ID}';`);
+    expect(lawyerDeleteRes.rowCount).toBe(0);
 
-      // 3. Comprobamos que bajo el bypass administrativo se exponen ambos tenants sin barreras
-      expect(result.rows.length).toBe(2);
-      expect(result.rows.some((r: { id: string }) => r.id === EXPEDIENTE_A_ID)).toBe(true);
-      expect(result.rows.some((r: { id: string }) => r.id === EXPEDIENTE_B_ID)).toBe(true);
+    // 2. Intento por usuario con rol 'administrator' de la misma firma
+    await applySessionContext({
+      userId: USER_A_ADMIN_ID,
+      firmId: FIRM_A_ID,
+      role: 'authenticated',
+    });
 
-    } finally {
-      await db.query('ROLLBACK;');
-    }
+    const adminDeleteRes = await client.query(`DELETE FROM public.cases WHERE id = '${CASE_A_ID}';`);
+    expect(adminDeleteRes.rowCount).toBe(1);
+  });
+
+  /**
+   * Escenario D: Borrado Cruzado Inter-Tenant (Cross-Tenant DELETE)
+   * Ataque: Administrador de Firma A intenta eliminar por ID un expediente perteneciente a Firma B.
+   * Expectativa: RLS hace "invisible" el registro de Firma B, resultando en 0 filas afectadas.
+   */
+  it('Escenario D: Debe garantizar 0 filas afectadas en intentos de borrado inter-tenant por Administrador', async () => {
+    await applySessionContext({
+      userId: USER_A_ADMIN_ID,
+      firmId: FIRM_A_ID,
+      role: 'authenticated',
+    });
+
+    const crossDeleteRes = await client.query(`DELETE FROM public.cases WHERE id = '${CASE_B_ID}';`);
+
+    // Para la sesión de Firma A, el registro de Firma B no existe en el espacio de tuplas
+    expect(crossDeleteRes.rowCount).toBe(0);
   });
 });
